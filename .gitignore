@@ -1,0 +1,13 @@
+## .NET
+bin/
+obj/
+*.user
+
+## LitRAG local data (per-machine, not shared)
+src/LitRag.Web/App_Data/
+src/LitRag.Web/wwwroot/library/*
+!src/LitRag.Web/wwwroot/library/.gitkeep
+
+## IDE
+.vs/
+.vscode/

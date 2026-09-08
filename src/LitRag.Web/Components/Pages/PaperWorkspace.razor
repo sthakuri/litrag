@@ -1,0 +1,220 @@
+@page "/paper/{PaperId:int}"
+@rendermode InteractiveServer
+@layout WorkspaceLayout
+@using System.Net
+@using System.Text
+@inject LibraryService LibraryService
+@inject RagChatService RagChatService
+@inject LitRagDbContext Db
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>@(paper?.Title ?? "Paper")</PageTitle>
+
+@if (paper is null)
+{
+    <p class="p-4">Loading…</p>
+}
+else
+{
+    <div class="workspace">
+        <div class="pdf-pane">
+            <div class="pdf-toolbar">
+                <a href="/" class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-arrow-left"></i> Library</a>
+                <span class="pdf-title" title="@paper.Title">@paper.Title</span>
+            </div>
+            <iframe class="pdf-frame" src="@fileUrl" title="@paper.Title"></iframe>
+        </div>
+
+        <div class="chat-pane">
+            <div class="chat-header d-flex justify-content-between align-items-center">
+                <span>Ask about this paper</span>
+                @if (messages.Count > 0)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ClearChatAsync"
+                            disabled="@isClearing" title="Clear chat history">
+                        <i class="fa-solid fa-broom"></i> Clear
+                    </button>
+                }
+            </div>
+
+            <div class="chat-history" @ref="chatHistoryRef">
+                @if (messages.Count == 0 && streamingAnswer is null)
+                {
+                    <div class="chat-empty text-secondary">Ask a question about "@paper.Title" to get started.</div>
+                }
+                @foreach (var m in messages)
+                {
+                    <div class="chat-msg @(m.Role == ChatRole.User ? "user" : "assistant")">
+                        <div class="chat-bubble">@((MarkupString)FormatMessage(m.Content))</div>
+                        @if (!string.IsNullOrEmpty(m.SourcePagesCsv))
+                        {
+                            <div class="chat-sources">Sources: p. @m.SourcePagesCsv</div>
+                        }
+                    </div>
+                }
+                @if (streamingAnswer is not null)
+                {
+                    <div class="chat-msg assistant">
+                        <div class="chat-bubble">@((MarkupString)FormatMessage(streamingAnswer))</div>
+                    </div>
+                }
+                @if (chatError is not null)
+                {
+                    <div class="alert alert-danger mt-2 mb-0">@chatError</div>
+                }
+            </div>
+
+            <div class="chat-input">
+                <input class="form-control" placeholder="Ask a question…" value="@question"
+                       @oninput="e => question = e.Value?.ToString() ?? string.Empty"
+                       @onkeydown="OnKeyDownAsync" disabled="@isSending" />
+                <button class="btn btn-primary" @onclick="SendAsync" disabled="@(isSending || string.IsNullOrWhiteSpace(question))">
+                    <i class="fa-solid @(isSending ? "fa-spinner fa-spin" : "fa-paper-plane")"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int PaperId { get; set; }
+
+    private Paper? paper;
+    private string? fileUrl;
+    private List<ChatMessage> messages = [];
+    private ElementReference chatHistoryRef;
+
+    private string question = string.Empty;
+    private string? streamingAnswer;
+    private string? chatError;
+    private bool isSending;
+    private bool isClearing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        paper = await LibraryService.GetAsync(PaperId);
+        if (paper is null)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        fileUrl = LibraryService.GetRelativeFileUrl(paper);
+        messages = await Db.ChatMessages
+            .Where(m => m.PaperId == PaperId)
+            .OrderBy(m => m.CreatedAtUtc)
+            .ToListAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await ScrollToBottomAsync();
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SendAsync();
+        }
+    }
+
+    private async Task SendAsync()
+    {
+        var userText = question.Trim();
+        if (userText.Length == 0 || isSending)
+        {
+            return;
+        }
+
+        question = string.Empty;
+        chatError = null;
+        isSending = true;
+
+        var userMsg = new ChatMessage { PaperId = PaperId, Role = ChatRole.User, Content = userText };
+        Db.ChatMessages.Add(userMsg);
+        await Db.SaveChangesAsync();
+        messages.Add(userMsg);
+        StateHasChanged();
+        await ScrollToBottomAsync();
+
+        try
+        {
+            var answer = await RagChatService.AskStreamingAsync(PaperId, userText);
+            var sb = new StringBuilder();
+            streamingAnswer = string.Empty;
+
+            await foreach (var token in answer.TokenStream)
+            {
+                sb.Append(token);
+                streamingAnswer = sb.ToString();
+                StateHasChanged();
+                await ScrollToBottomAsync();
+            }
+
+            var assistantMsg = new ChatMessage
+            {
+                PaperId = PaperId,
+                Role = ChatRole.Assistant,
+                Content = sb.ToString(),
+                SourcePagesCsv = answer.SourcePages.Count > 0 ? string.Join(", ", answer.SourcePages) : null
+            };
+            Db.ChatMessages.Add(assistantMsg);
+            await Db.SaveChangesAsync();
+            messages.Add(assistantMsg);
+        }
+        catch (Exception ex)
+        {
+            chatError = $"Couldn't get an answer: {ex.Message}";
+        }
+        finally
+        {
+            streamingAnswer = null;
+            isSending = false;
+            StateHasChanged();
+            await ScrollToBottomAsync();
+        }
+    }
+
+    private async Task ClearChatAsync()
+    {
+        if (isClearing)
+        {
+            return;
+        }
+
+        var confirmed = await JS.InvokeAsync<bool>("confirm", "Clear all chat history for this paper? This can't be undone.");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        isClearing = true;
+        try
+        {
+            await Db.ChatMessages.Where(m => m.PaperId == PaperId).ExecuteDeleteAsync();
+            messages.Clear();
+            chatError = null;
+            streamingAnswer = null;
+        }
+        finally
+        {
+            isClearing = false;
+        }
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("litragChat.scrollToBottom", chatHistoryRef);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private static string FormatMessage(string content) =>
+        WebUtility.HtmlEncode(content).Replace("\n", "<br/>");
+}

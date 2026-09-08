@@ -1,0 +1,168 @@
+@page "/"
+@rendermode InteractiveServer
+@inject LibraryService LibraryService
+@inject OllamaClient Ollama
+@inject NavigationManager Nav
+
+<PageTitle>LitRAG Library</PageTitle>
+
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="mb-0">LitRAG Library</h1>
+        <a href="/upload" class="btn btn-primary"><i class="fa-solid fa-upload"></i> Upload Paper</a>
+    </div>
+
+    @if (ollamaAvailable == false)
+    {
+        <div class="alert alert-warning" role="alert">
+            Ollama isn't reachable at the configured address. Paper validation and chat need it running
+            locally (see the README for setup). You can still browse and search the library.
+        </div>
+    }
+
+    @if (postSaveWarning is not null)
+    {
+        <div class="alert alert-warning">@postSaveWarning</div>
+    }
+
+    <input class="form-control mb-3" placeholder="Search by title, author, venue, or tag…"
+           value="@searchQuery" @oninput="OnSearchInputAsync" />
+
+    @if (papers is null)
+    {
+        <p class="text-secondary">Loading…</p>
+    }
+    else if (papers.Count == 0)
+    {
+        <p class="text-secondary">No papers found. <a href="/upload">Upload one</a> to get started.</p>
+    }
+    else
+    {
+        <div class="list-group">
+            @foreach (var paper in papers)
+            {
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <h5 class="mb-1">@paper.Title</h5>
+                            <div class="text-secondary small">
+                                @paper.Authors
+                                @if (paper.Venue is not null) { <span> — @paper.Venue</span> }
+                            </div>
+                            <div class="mt-1 d-flex align-items-center flex-wrap gap-1">
+                                @if (!string.IsNullOrWhiteSpace(paper.SourceUrl))
+                                {
+                                    <a href="@paper.SourceUrl" target="_blank" rel="noopener noreferrer"
+                                       class="btn btn-sm btn-outline-primary py-0" title="Open source URL">
+                                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Source
+                                    </a>
+                                }
+                                @if (paper.Year is not null)
+                                {
+                                    <span class="badge text-bg-secondary"><i class="fa-solid fa-calendar"></i> @paper.Year</span>
+                                }
+                                @foreach (var tag in paper.Tags)
+                                {
+                                    <span class="badge text-bg-light border">@tag</span>
+                                }
+                            </div>
+                            @if (!indexedPaperIds.Contains(paper.Id))
+                            {
+                                <div class="mt-1">
+                                    <span class="badge text-bg-warning">Not indexed — chat unavailable</span>
+                                </div>
+                            }
+                        </div>
+                        <div class="d-flex flex-column align-items-end gap-1">
+                            <button class="btn btn-sm btn-primary" @onclick="() => OpenPaper(paper.Id)">
+                                <i class="fa-solid fa-comments"></i> Chat with Paper
+                            </button>
+                            @if (!indexedPaperIds.Contains(paper.Id))
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@reindexingIds.Contains(paper.Id)"
+                                        @onclick="() => ReindexAsync(paper.Id)">
+                                    <i class="fa-solid fa-rotate @(reindexingIds.Contains(paper.Id) ? "fa-spin" : "")"></i>
+                                    @(reindexingIds.Contains(paper.Id) ? "Indexing…" : "Re-index")
+                                </button>
+                            }
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(paper.Id)">
+                                <i class="fa-solid fa-trash"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (reindexProgress.TryGetValue(paper.Id, out var prog))
+                    {
+                        var pct = prog.Total > 0 ? prog.Done * 100 / prog.Total : 0;
+                        <div class="mt-2">
+                            <div class="progress" style="height: 6px;">
+                                <div class="progress-bar" role="progressbar" style="width: @(pct)%"
+                                     aria-valuenow="@pct" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                            <div class="text-secondary small mt-1">Indexing: @prog.Done / @prog.Total chunks…</div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private bool? ollamaAvailable;
+    private List<Paper>? papers;
+    private HashSet<int> indexedPaperIds = [];
+    private HashSet<int> reindexingIds = [];
+    private Dictionary<int, EmbeddingProgress> reindexProgress = [];
+    private string searchQuery = string.Empty;
+    private string? postSaveWarning;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ollamaAvailable = await Ollama.IsAvailableAsync();
+        await RefreshPapersAsync();
+    }
+
+    private async Task RefreshPapersAsync()
+    {
+        papers = await LibraryService.SearchAsync(searchQuery);
+        indexedPaperIds = await LibraryService.GetIndexedPaperIdsAsync(papers.Select(p => p.Id));
+    }
+
+    private async Task OnSearchInputAsync(ChangeEventArgs e)
+    {
+        searchQuery = e.Value?.ToString() ?? string.Empty;
+        await RefreshPapersAsync();
+    }
+
+    private void OpenPaper(int paperId) => Nav.NavigateTo($"/paper/{paperId}");
+
+    private async Task DeleteAsync(int paperId)
+    {
+        await LibraryService.DeleteAsync(paperId);
+        await RefreshPapersAsync();
+    }
+
+    private async Task ReindexAsync(int paperId)
+    {
+        reindexingIds.Add(paperId);
+        reindexProgress[paperId] = new EmbeddingProgress(0, 0);
+        StateHasChanged();
+
+        var progress = new Progress<EmbeddingProgress>(p =>
+        {
+            reindexProgress[paperId] = p;
+            InvokeAsync(StateHasChanged);
+        });
+
+        var result = await LibraryService.ReindexAsync(paperId, progress);
+        if (!result.Indexed)
+        {
+            postSaveWarning = $"Re-index failed: {result.Error}";
+        }
+
+        reindexingIds.Remove(paperId);
+        reindexProgress.Remove(paperId);
+        await RefreshPapersAsync();
+    }
+}

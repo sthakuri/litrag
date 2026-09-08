@@ -1,0 +1,226 @@
+@page "/upload"
+@rendermode InteractiveServer
+@inject LibraryService LibraryService
+@inject PaperValidationService ValidationService
+@inject PdfTextExtractor PdfExtractor
+@inject OllamaClient Ollama
+@inject NavigationManager Nav
+
+<PageTitle>Upload Paper</PageTitle>
+
+<div class="container py-4">
+    <div class="d-flex align-items-center gap-2 mb-3">
+        <a href="/" class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-arrow-left"></i> Library</a>
+        <h1 class="mb-0">Upload a paper</h1>
+    </div>
+
+    @if (ollamaAvailable == false)
+    {
+        <div class="alert alert-warning" role="alert">
+            Ollama isn't reachable at the configured address. Paper validation and chat indexing need it
+            running locally (see the README for setup).
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-body">
+            <div class="mb-3">
+                <InputFile OnChange="OnFileSelectedAsync" class="form-control" accept="application/pdf" />
+                <div class="form-text">Only PDF files are accepted.</div>
+            </div>
+
+            @if (isProcessing)
+            {
+                <div class="d-flex align-items-center gap-2 text-secondary">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span>Reading and validating @pendingFileName…</span>
+                </div>
+            }
+
+            @if (errorMessage is not null)
+            {
+                <div class="alert alert-danger">@errorMessage</div>
+            }
+
+            @if (savedMessage is not null)
+            {
+                <div class="alert @(savedIndexed ? "alert-success" : "alert-warning")">
+                    @savedMessage
+                    <a href="/">View in library</a>
+                </div>
+            }
+
+            @if (validationResult is not null && !validationResult.IsValid)
+            {
+                <div class="alert alert-danger">
+                    <strong>Not a valid paper.</strong> @validationResult.Reason
+                </div>
+            }
+
+            @if (validationResult is { IsValid: true })
+            {
+                <div class="alert alert-success py-2">Looks like a research paper. Review the details below and save.</div>
+
+                <EditForm Model="this" OnValidSubmit="SaveAsync">
+                    <div class="mb-2">
+                        <label class="form-label">Title</label>
+                        <input class="form-control" @bind="formTitle" required />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Authors</label>
+                        <input class="form-control" @bind="formAuthors" placeholder="e.g. Jane Doe, John Smith" />
+                    </div>
+                    <div class="row">
+                        <div class="col-8 mb-2">
+                            <label class="form-label">Venue</label>
+                            <input class="form-control" @bind="formVenue" placeholder="e.g. NeurIPS 2024" />
+                        </div>
+                        <div class="col-4 mb-2">
+                            <label class="form-label">Year</label>
+                            <input class="form-control" type="number" @bind="formYear" />
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Source URL</label>
+                        <input class="form-control" @bind="formSourceUrl" placeholder="https://arxiv.org/abs/..." />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tags</label>
+                        <input class="form-control" @bind="formTags" placeholder="comma, separated, tags" />
+                    </div>
+                    <button type="submit" class="btn btn-primary" disabled="@isSaving">
+                        <i class="fa-solid fa-floppy-disk"></i> @(isSaving ? "Saving…" : "Add to library")
+                    </button>
+                    <button type="button" class="btn btn-link" @onclick="ResetUploadForm" disabled="@isSaving">
+                        <i class="fa-solid fa-xmark"></i> Cancel
+                    </button>
+                </EditForm>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private const long MaxFileSizeBytes = 50 * 1024 * 1024;
+
+    private bool? ollamaAvailable;
+
+    private bool isProcessing;
+    private bool isSaving;
+    private string? errorMessage;
+    private string? savedMessage;
+    private bool savedIndexed;
+    private string? pendingFileName;
+    private byte[]? pendingBytes;
+    private ExtractedPdf? pendingExtracted;
+    private LitRag.Web.Services.Validation.PaperValidationResult? validationResult;
+
+    private string formTitle = string.Empty;
+    private string formAuthors = string.Empty;
+    private string formVenue = string.Empty;
+    private int? formYear;
+    private string formSourceUrl = string.Empty;
+    private string formTags = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ollamaAvailable = await Ollama.IsAvailableAsync();
+    }
+
+    private async Task OnFileSelectedAsync(InputFileChangeEventArgs e)
+    {
+        ResetUploadForm();
+        savedMessage = null;
+        pendingFileName = e.File.Name;
+        isProcessing = true;
+
+        try
+        {
+            await using var stream = e.File.OpenReadStream(MaxFileSizeBytes);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            pendingBytes = buffer.ToArray();
+
+            if (!PdfExtractor.TryExtract(pendingBytes, out var extracted, out var extractError))
+            {
+                errorMessage = extractError;
+                return;
+            }
+
+            pendingExtracted = extracted;
+            validationResult = await ValidationService.ValidateAsync(extracted!);
+
+            if (validationResult.IsValid)
+            {
+                formTitle = validationResult.Title ?? Path.GetFileNameWithoutExtension(pendingFileName);
+                formAuthors = validationResult.Authors ?? string.Empty;
+                formVenue = validationResult.Venue ?? string.Empty;
+                formYear = validationResult.Year;
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to process this file: {ex.Message}";
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (pendingBytes is null || pendingExtracted is null || string.IsNullOrWhiteSpace(formTitle))
+        {
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            var tags = formTags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var request = new UploadPaperRequest(
+                pendingFileName ?? "paper.pdf",
+                pendingBytes,
+                formTitle.Trim(),
+                string.IsNullOrWhiteSpace(formAuthors) ? null : formAuthors.Trim(),
+                string.IsNullOrWhiteSpace(formVenue) ? null : formVenue.Trim(),
+                formYear,
+                string.IsNullOrWhiteSpace(formSourceUrl) ? null : formSourceUrl.Trim(),
+                tags);
+
+            var result = await LibraryService.SaveAsync(request, pendingExtracted);
+            var title = result.Paper.Title;
+            ResetUploadForm();
+
+            savedIndexed = result.Indexed;
+            savedMessage = result.Indexed
+                ? $"\"{title}\" was added to the library."
+                : $"\"{title}\" was added, but chat indexing failed ({result.IndexError}). " +
+                  "Fix the issue (e.g. pull the required Ollama models) and use \"Re-index\" from the library.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to save this paper: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void ResetUploadForm()
+    {
+        errorMessage = null;
+        validationResult = null;
+        pendingFileName = null;
+        pendingBytes = null;
+        pendingExtracted = null;
+        formTitle = string.Empty;
+        formAuthors = string.Empty;
+        formVenue = string.Empty;
+        formYear = null;
+        formSourceUrl = string.Empty;
+        formTags = string.Empty;
+    }
+}
