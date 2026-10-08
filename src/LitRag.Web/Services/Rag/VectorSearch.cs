@@ -5,16 +5,21 @@ namespace LitRag.Web.Services.Rag;
 public static class VectorSearch
 {
     public static IReadOnlyList<(PaperChunk Chunk, float Score)> TopK(
-        IReadOnlyList<PaperChunk> chunks, float[] query, int k)
+        IReadOnlyList<PaperChunk> chunks, float[] query, int k) =>
+        TopK(chunks, c => c.UnpackEmbedding(), query, k);
+
+    /// <summary>Ranks arbitrary items by cosine similarity of a vector selected from each, highest first.</summary>
+    public static IReadOnlyList<(T Item, float Score)> TopK<T>(
+        IReadOnlyList<T> items, Func<T, float[]> vectorSelector, float[] query, int k)
     {
-        return chunks
-            .Select(c => (Chunk: c, Score: CosineSimilarity(query, c.UnpackEmbedding())))
+        return items
+            .Select(item => (Item: item, Score: CosineSimilarity(query, vectorSelector(item))))
             .OrderByDescending(x => x.Score)
             .Take(k)
             .ToList();
     }
 
-    private static float CosineSimilarity(float[] a, float[] b)
+    public static float CosineSimilarity(float[] a, float[] b)
     {
         var len = Math.Min(a.Length, b.Length);
         float dot = 0, normA = 0, normB = 0;
