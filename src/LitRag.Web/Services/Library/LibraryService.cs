@@ -132,6 +132,19 @@ public class LibraryService(
     public Task<Paper?> GetAsync(int id, CancellationToken ct = default) =>
         db.Papers.FirstOrDefaultAsync(p => p.Id == id, ct);
 
+    public async Task<bool> UpdateReadingStatusAsync(int id, ReadingStatus status, CancellationToken ct = default)
+    {
+        var paper = await db.Papers.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (paper is null)
+        {
+            return false;
+        }
+
+        paper.ReadingStatus = status;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     public static string GetRelativeFileUrl(Paper paper) => $"/library/{paper.StoredFileName}";
 
     /// <summary>Paper IDs that have at least one indexed chunk (i.e. are ready for chat).</summary>
