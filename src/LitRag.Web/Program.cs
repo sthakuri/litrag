@@ -40,6 +40,7 @@ builder.Services.AddScoped<EmbeddingService>();
 builder.Services.AddScoped<PaperValidationService>();
 builder.Services.AddScoped<LibraryService>();
 builder.Services.AddScoped<RagChatService>();
+builder.Services.AddScoped<RelatedPapersService>();
 builder.Services.AddScoped<SummaryService>();
 
 var app = builder.Build();
