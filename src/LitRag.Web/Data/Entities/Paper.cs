@@ -23,6 +23,7 @@ public class Paper
     public int PageCount { get; set; }
 
     public ReadingStatus ReadingStatus { get; set; } = ReadingStatus.Unread;
+    public string? Summary { get; set; }
 
     public DateTime UploadedAtUtc { get; set; } = DateTime.UtcNow;
 

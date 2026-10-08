@@ -4,6 +4,7 @@ using LitRag.Web.Services.Library;
 using LitRag.Web.Services.Ollama;
 using LitRag.Web.Services.Pdf;
 using LitRag.Web.Services.Rag;
+using LitRag.Web.Services.Summary;
 using LitRag.Web.Services.Validation;
 using Microsoft.EntityFrameworkCore;
 
@@ -39,6 +40,7 @@ builder.Services.AddScoped<EmbeddingService>();
 builder.Services.AddScoped<PaperValidationService>();
 builder.Services.AddScoped<LibraryService>();
 builder.Services.AddScoped<RagChatService>();
+builder.Services.AddScoped<SummaryService>();
 
 var app = builder.Build();
 
@@ -77,28 +79,34 @@ app.Run();
 // directly. Existing rows get the column's default value.
 static void ApplyLightweightSchemaUpgrades(string connectionString)
 {
+    // (column name, DDL to add it if missing)
+    (string Column, string AlterSql)[] paperColumnUpgrades =
+    [
+        ("ReadingStatus", "ALTER TABLE Papers ADD COLUMN ReadingStatus INTEGER NOT NULL DEFAULT 0"),
+        ("Summary", "ALTER TABLE Papers ADD COLUMN Summary TEXT NULL"),
+    ];
+
     using var connection = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
     connection.Open();
 
-    using var checkCommand = connection.CreateCommand();
-    checkCommand.CommandText = "PRAGMA table_info(Papers)";
-    var hasReadingStatus = false;
-    using (var reader = checkCommand.ExecuteReader())
+    var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    using (var checkCommand = connection.CreateCommand())
     {
+        checkCommand.CommandText = "PRAGMA table_info(Papers)";
+        using var reader = checkCommand.ExecuteReader();
         while (reader.Read())
         {
-            if (string.Equals(reader.GetString(1), "ReadingStatus", StringComparison.OrdinalIgnoreCase))
-            {
-                hasReadingStatus = true;
-                break;
-            }
+            existingColumns.Add(reader.GetString(1));
         }
     }
 
-    if (!hasReadingStatus)
+    foreach (var (column, alterSql) in paperColumnUpgrades)
     {
-        using var alterCommand = connection.CreateCommand();
-        alterCommand.CommandText = "ALTER TABLE Papers ADD COLUMN ReadingStatus INTEGER NOT NULL DEFAULT 0";
-        alterCommand.ExecuteNonQuery();
+        if (!existingColumns.Contains(column))
+        {
+            using var alterCommand = connection.CreateCommand();
+            alterCommand.CommandText = alterSql;
+            alterCommand.ExecuteNonQuery();
+        }
     }
 }

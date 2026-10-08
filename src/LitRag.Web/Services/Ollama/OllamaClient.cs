@@ -24,7 +24,10 @@ public enum EmbeddingKind
 public class OllamaClient(HttpClient httpClient, IOptions<OllamaOptions> options, ILogger<OllamaClient> logger)
 {
     private readonly OllamaOptions _options = options.Value;
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
@@ -63,12 +66,19 @@ public class OllamaClient(HttpClient httpClient, IOptions<OllamaOptions> options
     }
 
     /// <summary>Non-streaming generate call constrained to JSON output, used for paper validation/classification.</summary>
-    public async Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, CancellationToken ct = default)
+    public Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, CancellationToken ct = default) =>
+        GenerateAsync(systemPrompt, userPrompt, format: "json", ct);
+
+    /// <summary>Non-streaming generate call for free-form prose, used e.g. for paper summaries.</summary>
+    public Task<string> GenerateTextAsync(string systemPrompt, string userPrompt, CancellationToken ct = default) =>
+        GenerateAsync(systemPrompt, userPrompt, format: null, ct);
+
+    private async Task<string> GenerateAsync(string systemPrompt, string userPrompt, string? format, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(_options.RequestTimeoutSeconds));
 
-        var request = new GenerateRequest(_options.ChatModel, userPrompt, systemPrompt, "json", false);
+        var request = new GenerateRequest(_options.ChatModel, userPrompt, systemPrompt, format, false);
         using var response = await httpClient.PostAsJsonAsync("/api/generate", request, JsonOptions, cts.Token);
         await EnsureSuccessAsync(response, cts.Token);
 
@@ -168,7 +178,7 @@ public class OllamaClient(HttpClient httpClient, IOptions<OllamaOptions> options
     private record EmbeddingRequest(string Model, string Prompt);
     private record EmbeddingResponse(float[] Embedding);
 
-    private record GenerateRequest(string Model, string Prompt, string System, string Format, bool Stream);
+    private record GenerateRequest(string Model, string Prompt, string System, string? Format, bool Stream);
     private record GenerateResponse(string Response);
 
     private record ChatRequest(string Model, IReadOnlyList<OllamaChatMessage> Messages, bool Stream);
