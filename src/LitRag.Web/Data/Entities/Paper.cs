@@ -1,5 +1,12 @@
 namespace LitRag.Web.Data.Entities;
 
+public enum ReadingStatus
+{
+    Unread,
+    Reading,
+    Completed
+}
+
 public class Paper
 {
     public int Id { get; set; }
@@ -14,6 +21,8 @@ public class Paper
     public required string FileName { get; set; }
     public required string StoredFileName { get; set; }
     public int PageCount { get; set; }
+
+    public ReadingStatus ReadingStatus { get; set; } = ReadingStatus.Unread;
 
     public DateTime UploadedAtUtc { get; set; } = DateTime.UtcNow;
 

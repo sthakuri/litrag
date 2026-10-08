@@ -22,6 +22,12 @@ else
             <div class="pdf-toolbar">
                 <a href="/" class="btn btn-sm btn-outline-secondary"><i class="fa-solid fa-arrow-left"></i> Library</a>
                 <span class="pdf-title" title="@paper.Title">@paper.Title</span>
+                <select class="form-select form-select-sm d-inline-block w-auto ms-auto" value="@paper.ReadingStatus.ToString()"
+                        @onchange="UpdateStatusAsync" title="Reading status">
+                    <option value="Unread">Unread</option>
+                    <option value="Reading">Reading</option>
+                    <option value="Completed">Completed</option>
+                </select>
             </div>
             <iframe class="pdf-frame" src="@fileUrl" title="@paper.Title"></iframe>
         </div>
@@ -202,6 +208,17 @@ else
         {
             isClearing = false;
         }
+    }
+
+    private async Task UpdateStatusAsync(ChangeEventArgs e)
+    {
+        if (paper is null || e.Value is not string s || !Enum.TryParse<ReadingStatus>(s, out var status))
+        {
+            return;
+        }
+
+        await LibraryService.UpdateReadingStatusAsync(PaperId, status);
+        paper.ReadingStatus = status;
     }
 
     private async Task ScrollToBottomAsync()

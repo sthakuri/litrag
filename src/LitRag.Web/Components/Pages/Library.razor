@@ -61,6 +61,12 @@
                                 {
                                     <span class="badge text-bg-secondary"><i class="fa-solid fa-calendar"></i> @paper.Year</span>
                                 }
+                                <select class="form-select form-select-sm d-inline-block w-auto" value="@paper.ReadingStatus.ToString()"
+                                        @onchange="e => UpdateStatusAsync(paper.Id, e)" title="Reading status">
+                                    <option value="Unread">Unread</option>
+                                    <option value="Reading">Reading</option>
+                                    <option value="Completed">Completed</option>
+                                </select>
                                 @foreach (var tag in paper.Tags)
                                 {
                                     <span class="badge text-bg-light border">@tag</span>
@@ -136,6 +142,15 @@
     }
 
     private void OpenPaper(int paperId) => Nav.NavigateTo($"/paper/{paperId}");
+
+    private async Task UpdateStatusAsync(int paperId, ChangeEventArgs e)
+    {
+        if (e.Value is string s && Enum.TryParse<ReadingStatus>(s, out var status))
+        {
+            await LibraryService.UpdateReadingStatusAsync(paperId, status);
+            await RefreshPapersAsync();
+        }
+    }
 
     private async Task DeleteAsync(int paperId)
     {

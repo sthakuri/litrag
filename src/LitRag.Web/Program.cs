@@ -22,8 +22,8 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
 var dataDir = Path.Combine(builder.Environment.ContentRootPath, "App_Data");
 Directory.CreateDirectory(dataDir);
 
-builder.Services.AddDbContext<LitRagDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("Default") ?? "Data Source=App_Data/litrag.db"));
+var sqliteConnectionString = builder.Configuration.GetConnectionString("Default") ?? "Data Source=App_Data/litrag.db";
+builder.Services.AddDbContext<LitRagDbContext>(options => options.UseSqlite(sqliteConnectionString));
 
 builder.Services.Configure<OllamaOptions>(builder.Configuration.GetSection(OllamaOptions.SectionName));
 builder.Services.AddHttpClient<OllamaClient>((sp, client) =>
@@ -46,6 +46,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<LitRagDbContext>();
     db.Database.EnsureCreated();
+    ApplyLightweightSchemaUpgrades(sqliteConnectionString);
 }
 
 // Configure the HTTP request pipeline.
@@ -69,3 +70,35 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
+
+// EnsureCreated() only builds a brand-new database; it won't add columns that were added to an
+// entity after a database already exists on disk. Rather than require a full EF migrations setup
+// (or force users to delete their library) for small additive changes, patch missing columns in
+// directly. Existing rows get the column's default value.
+static void ApplyLightweightSchemaUpgrades(string connectionString)
+{
+    using var connection = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
+    connection.Open();
+
+    using var checkCommand = connection.CreateCommand();
+    checkCommand.CommandText = "PRAGMA table_info(Papers)";
+    var hasReadingStatus = false;
+    using (var reader = checkCommand.ExecuteReader())
+    {
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), "ReadingStatus", StringComparison.OrdinalIgnoreCase))
+            {
+                hasReadingStatus = true;
+                break;
+            }
+        }
+    }
+
+    if (!hasReadingStatus)
+    {
+        using var alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = "ALTER TABLE Papers ADD COLUMN ReadingStatus INTEGER NOT NULL DEFAULT 0";
+        alterCommand.ExecuteNonQuery();
+    }
+}
