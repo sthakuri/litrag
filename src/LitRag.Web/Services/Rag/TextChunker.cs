@@ -39,7 +39,7 @@ public class TextChunker
                     break;
                 }
 
-                start += ChunkSize - Overlap;
+                start += ChunkSize;
             }
         }
 
