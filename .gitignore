@@ -11,3 +11,6 @@ src/LitRag.Web/wwwroot/library/*
 ## IDE
 .vs/
 .vscode/
+
+TestResults/
+coveragereport/

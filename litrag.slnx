@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/LitRag.Web/LitRag.Web.csproj" />
+    <Project Path="src/LitRag.Tests/LitRag.Tests.csproj" />
   </Folder>
 </Solution>
